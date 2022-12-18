@@ -81,24 +81,18 @@ do
 openstack network delete $NETWORK_ID
 done
 echo "All Networks Has been deleted"
-
-
 TENANTID=$(openstack project show $1 --format json | jq -r '.id')
 
-AGGRID=$(openstack aggregate list --long --format json | jq '.[] | {ID, "filter_tenant_id": .Properties["filter_tenant_id"] }' | jq -r 'select(.filter_tenant_id == "'$TENANTID'")' | jq -r '.ID')
+AGGRID=$(openstack aggregate list --long --format json | jq '.[] | {ID, "filter_tenant_id": .Properties["filter_tenant_id"] }' | jq -r 'select(.filter_tena>
 
-if [ -z "$AGGRID" ]
-then
-        {
-                for AGGRHOST in $(openstack aggregate show $AGGRID --format json | jq -r '.hosts[]')
-                do
-                openstack aggregate remove host $AGGRID $AGGRHOST > /dev/null && openstack aggregate delete $AGGRID
-                done
-        }
+if [ -z $AGGRID ];
+then echo "Host aggrigate not exist!" ;
 else
-      echo "Host aggregate Has been destroyed"
+for AGGRHOST in $(openstack aggregate show $AGGRID --format json | jq -r '.hosts[]') ; do openstack aggregate remove host $AGGRID $AGGRHOST > /dev/null;don>sleep 10 && openstack aggregate delete $AGGRID
 fi
 
-#openstack project set --disable $TENANTID
+#echo "Host aggregate Has been destroyed"
+
+openstack project set --disable $TENANTID
 
 echo " *** The Project has been cleaned up and disabled *** "
