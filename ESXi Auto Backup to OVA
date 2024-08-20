@@ -2,10 +2,10 @@
 
 # ESXi credentials and details
 ESXI_USER="root"
-ESXI_PASSWORD="xaas@xaas12"
-ESXI_HOST="192.168.0.186"
-BACKUP_DIR="/Backup"
-OVFTOOL_PATH="/opt/ovftool/ovftool"
+ESXI_PASSWORD="MY_ESXI_PASSWORD"
+ESXI_HOST="MY_ESXI_IP_OR_FQDN"
+BACKUP_DIR="MY_BACKUP_DIRECTORY"
+OVFTOOL_PATH="OVFTOOL_BINERY_PATH"
 VM_POLL_INTERVAL=5  # Interval in seconds to check the VM's power state
 
 # Function to execute commands via SSH
