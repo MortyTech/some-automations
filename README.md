@@ -1,8 +1,8 @@
-this script automatically connacts to your ESXi infra and get the all vm list and make them powerOff, backup, and powerOn, backup is done by ovftool command line
+The `ESXi Auto Backup to OVA` script automatically connacts to your ESXi infra and get the all vm list and make them powerOff, backup, and powerOn, backup is done by ovftool command line
 
 !!! Important !!!
 
-please be notice to install the ovftool for linux in proper path like /opt !
+please be notice to install the ovftool for linux in proper path like `/opt` !
 
 rename the VMs that has space in their names ! it can not handel ! 
 
