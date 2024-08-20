@@ -26,14 +26,22 @@ is_vm_powered_off() {
 }
 
 # Get the list of all VMs with their VMIDs and Names and save it to a variable
-vm_list=$(execute_ssh "vim-cmd vmsvc/getallvms | awk 'NR>1 {print \$1 \" \" \$2}'")
+vm_list=$(execute_ssh "vim-cmd vmsvc/getallvms | tail -n +2")
 
 # Use a for loop to iterate over each VM
 IFS=$'\n'  # Set internal field separator to newline to handle each line correctly
 for vm_info in $vm_list; do
+    # Extract the VM ID (first field)
     vm_id=$(echo "$vm_info" | awk '{print $1}')
-    vm_name=$(echo "$vm_info" | awk '{print $2}')
-    backup_file="$BACKUP_DIR/$vm_name.ova"
+    
+    # Extract the VM name by removing everything after the name (everything after '[')
+    vm_name=$(echo "$vm_info" | sed -E 's/^[0-9]+\s+(.+?)\s+\[.+/\1/')
+    
+    # Sanitize the VM name to make it suitable for filenames
+    # Replace spaces with underscores and remove any leading/trailing spaces
+    sanitized_vm_name=$(echo "$vm_name" | sed 's/ /_/g' | sed 's/^ *//;s/ *$//')
+
+    backup_file="$BACKUP_DIR/$sanitized_vm_name.ova"
 
     echo "Processing VM: $vm_name (VMID: $vm_id)"
 
@@ -43,23 +51,28 @@ for vm_info in $vm_list; do
         continue
     fi
 
-    # Step 2: Power off the VM
-    echo "Shutting down VM: $vm_name"
-    execute_ssh "vim-cmd vmsvc/power.off $vm_id"
+    # Step 2: Check if the VM is already powered off
+    if is_vm_powered_off $vm_id; then
+        echo "VM: $vm_name is already powered off."
+    else
+        # If the VM is powered on, power it off
+        echo "Shutting down VM: $vm_name"
+        execute_ssh "vim-cmd vmsvc/power.off $vm_id"
 
-    # Step 3: Wait until the VM is powered off
-    echo "Waiting for VM: $vm_name to power off..."
-    while ! is_vm_powered_off $vm_id; do
-        echo "VM: $vm_name is still powered on. Checking again in $VM_POLL_INTERVAL seconds..."
-        sleep $VM_POLL_INTERVAL
-    done
-    echo "VM: $vm_name is now powered off."
+        # Wait until the VM is fully powered off
+        echo "Waiting for VM: $vm_name to power off..."
+        while ! is_vm_powered_off $vm_id; do
+            echo "VM: $vm_name is still powered on. Checking again in $VM_POLL_INTERVAL seconds..."
+            sleep $VM_POLL_INTERVAL
+        done
+        echo "VM: $vm_name is now powered off."
+    fi
 
-    # Step 4: Backup the VM using ovftool
+    # Step 3: Backup the VM using ovftool
     echo "Backing up VM: $vm_name"
     $OVFTOOL_PATH --noSSLVerify vi://$ESXI_USER:"$ESXI_PASSWORD"@$ESXI_HOST/$vm_name "$backup_file"
     
-    # Step 5: Power on the VM
+    # Step 4: Power on the VM
     echo "Powering on VM: $vm_name"
     execute_ssh "vim-cmd vmsvc/power.on $vm_id"
 
