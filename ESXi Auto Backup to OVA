@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# ESXi credentials and details
+ESXI_USER="root"
+ESXI_PASSWORD="xaas@xaas12"
+ESXI_HOST="192.168.0.186"
+BACKUP_DIR="/Backup"
+OVFTOOL_PATH="/opt/ovftool/ovftool"
+VM_POLL_INTERVAL=5  # Interval in seconds to check the VM's power state
+
+# Function to execute commands via SSH
+execute_ssh() {
+    local command=$1
+    sshpass -p "$ESXI_PASSWORD" ssh -o StrictHostKeyChecking=no "$ESXI_USER@$ESXI_HOST" "$command"
+}
+
+# Function to check if the VM is powered off
+is_vm_powered_off() {
+    local vm_id=$1
+    local power_state=$(execute_ssh "vim-cmd vmsvc/power.getstate $vm_id | tail -n 1")
+    if [[ "$power_state" == "Powered off" ]]; then
+        return 0  # VM is powered off
+    else
+        return 1  # VM is still running
+    fi
+}
+
+# Get the list of all VMs with their VMIDs and Names and save it to a variable
+vm_list=$(execute_ssh "vim-cmd vmsvc/getallvms | awk 'NR>1 {print \$1 \" \" \$2}'")
+
+# Use a for loop to iterate over each VM
+IFS=$'\n'  # Set internal field separator to newline to handle each line correctly
+for vm_info in $vm_list; do
+    vm_id=$(echo "$vm_info" | awk '{print $1}')
+    vm_name=$(echo "$vm_info" | awk '{print $2}')
+    backup_file="$BACKUP_DIR/$vm_name.ova"
+
+    echo "Processing VM: $vm_name (VMID: $vm_id)"
+
+    # Step 1: Check if backup already exists
+    if [ -f "$backup_file" ]; then
+        echo "Backup already exists for VM: $vm_name. Skipping backup."
+        continue
+    fi
+
+    # Step 2: Power off the VM
+    echo "Shutting down VM: $vm_name"
+    execute_ssh "vim-cmd vmsvc/power.off $vm_id"
+
+    # Step 3: Wait until the VM is powered off
+    echo "Waiting for VM: $vm_name to power off..."
+    while ! is_vm_powered_off $vm_id; do
+        echo "VM: $vm_name is still powered on. Checking again in $VM_POLL_INTERVAL seconds..."
+        sleep $VM_POLL_INTERVAL
+    done
+    echo "VM: $vm_name is now powered off."
+
+    # Step 4: Backup the VM using ovftool
+    echo "Backing up VM: $vm_name"
+    $OVFTOOL_PATH --noSSLVerify vi://$ESXI_USER:"$ESXI_PASSWORD"@$ESXI_HOST/$vm_name "$backup_file"
+    
+    # Step 5: Power on the VM
+    echo "Powering on VM: $vm_name"
+    execute_ssh "vim-cmd vmsvc/power.on $vm_id"
+
+    echo "Finished processing VM: $vm_name"
+done
+
+echo "All VMs processed."
