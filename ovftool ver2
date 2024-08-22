@@ -1,0 +1,102 @@
+#!/bin/bash
+
+# ESXi credentials and details
+ESXI_USER="root"
+ESXI_PASSWORD="MY_ESXI_PASSWORD"
+ESXI_HOST="MY_ESXI_IP_OR_FQDN"
+BACKUP_DIR="MY_BACKUP_DIRECTORY"
+OVFTOOL_PATH="OVFTOOL_BINERY_PATH"
+VM_POLL_INTERVAL=5  # Interval in seconds to check the VM's power state
+SHUTDOWN_TIMEOUT=300  # Timeout in seconds (5 minutes) to wait for graceful shutdown
+
+# Function to execute commands via SSH
+execute_ssh() {
+    local command=$1
+    sshpass -p "$ESXI_PASSWORD" ssh -o StrictHostKeyChecking=no "$ESXI_USER@$ESXI_HOST" "$command"
+}
+
+# Function to check if the VM is powered off
+is_vm_powered_off() {
+    local vm_id=$1
+    local power_state=$(execute_ssh "vim-cmd vmsvc/power.getstate $vm_id | tail -n 1")
+    if [[ "$power_state" == "Powered off" ]]; then
+        return 0  # VM is powered off
+    else
+        return 1  # VM is still running
+    fi
+}
+
+# Function to check if VM has open-vm-tools or VMware Tools running
+is_vmtools_running() {
+    local vm_id=$1
+    local tools_status=$(execute_ssh "vim-cmd vmsvc/get.summary $vm_id | grep 'toolsStatus' | awk '{print \$3}' | tr -d ','")
+    if [[ "$tools_status" == "\"toolsOk\"" ]]; then
+        return 0  # VMware Tools or open-vm-tools are running
+    else
+        return 1  # VMware Tools or open-vm-tools are not running
+    fi
+}
+
+# Get the list of all VMs with their VMIDs and Names and save it to a variable
+vm_list=$(execute_ssh "vim-cmd vmsvc/getallvms | awk 'NR>1 {print \$1 \" \" \$2}'")
+
+# Use a for loop to iterate over each VM
+IFS=$'\n'  # Set internal field separator to newline to handle each line correctly
+for vm_info in $vm_list; do
+    vm_id=$(echo "$vm_info" | awk '{print $1}')
+    vm_name=$(echo "$vm_info" | awk '{print $2}')
+    backup_file="$BACKUP_DIR/$vm_name.ova"
+
+    echo "Processing VM: $vm_name (VMID: $vm_id)"
+
+    # Step 1: Check if backup already exists
+    if [ -f "$backup_file" ]; then
+        echo "Backup already exists for VM: $vm_name. Skipping backup."
+        continue
+    fi
+
+    # Step 2: Check if the VM is already powered off
+    if is_vm_powered_off $vm_id; then
+        echo "VM: $vm_name is already powered off. Skipping shutdown."
+    else
+        # Check if VMware Tools or open-vm-tools are running
+        if is_vmtools_running $vm_id; then
+            # Attempt a graceful shutdown if tools are running
+            echo "VMware Tools detected. Attempting graceful shutdown for VM: $vm_name"
+            execute_ssh "vim-cmd vmsvc/power.shutdown $vm_id"
+        else
+            # No tools detected, perform a direct power off
+            echo "VMware Tools not detected. Directly powering off VM: $vm_name"
+            execute_ssh "vim-cmd vmsvc/power.off $vm_id"
+        fi
+
+        # Wait until the VM is powered off or timeout occurs
+        echo "Waiting for VM: $vm_name to power off..."
+        timeout_counter=0
+        while ! is_vm_powered_off $vm_id; do
+            if [ $timeout_counter -ge $SHUTDOWN_TIMEOUT ]; then
+                echo "Shutdown timed out for VM: $vm_name. Forcing power off..."
+                execute_ssh "vim-cmd vmsvc/power.off $vm_id"
+                break
+            fi
+            echo "VM: $vm_name is still powered on. Checking again in $VM_POLL_INTERVAL seconds..."
+            sleep $VM_POLL_INTERVAL
+            timeout_counter=$((timeout_counter + VM_POLL_INTERVAL))
+        done
+        echo "VM: $vm_name is now powered off."
+    fi
+
+    # Step 3: Backup the VM using ovftool
+    echo "Backing up VM: $vm_name"
+    $OVFTOOL_PATH --noSSLVerify vi://$ESXI_USER:"$ESXI_PASSWORD"@$ESXI_HOST/$vm_name "$backup_file"
+    
+    # Step 4: Power on the VM if it was originally running
+    if ! is_vm_powered_off $vm_id; then
+        echo "Powering on VM: $vm_name"
+        execute_ssh "vim-cmd vmsvc/power.on $vm_id"
+    fi
+
+    echo "Finished processing VM: $vm_name"
+done
+
+echo "All VMs processed."
