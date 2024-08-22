@@ -25,6 +25,17 @@ is_vm_powered_off() {
     fi
 }
 
+# Function to check if VM has open-vm-tools or VMware Tools running
+is_vmtools_running() {
+    local vm_id=$1
+    local tools_status=$(execute_ssh "vim-cmd vmsvc/get.summary $vm_id | grep 'toolsStatus' | awk '{print \$3}' | tr -d ','")
+    if [[ "$tools_status" == "\"toolsOk\"" ]]; then
+        return 0  # VMware Tools or open-vm-tools are running
+    else
+        return 1  # VMware Tools or open-vm-tools are not running
+    fi
+}
+
 # Get the list of all VMs with their VMIDs and Names and save it to a variable
 vm_list=$(execute_ssh "vim-cmd vmsvc/getallvms | awk 'NR>1 {print \$1 \" \" \$2}'")
 
@@ -47,15 +58,29 @@ for vm_info in $vm_list; do
     if is_vm_powered_off $vm_id; then
         echo "VM: $vm_name is already powered off. Skipping shutdown."
     else
-        # Power off the VM if it is running
-        echo "Shutting down VM: $vm_name"
-        execute_ssh "vim-cmd vmsvc/power.off $vm_id"
+        # Check if VMware Tools or open-vm-tools are running
+        if is_vmtools_running $vm_id; then
+            # Attempt a graceful shutdown if tools are running
+            echo "VMware Tools detected. Attempting graceful shutdown for VM: $vm_name"
+            execute_ssh "vim-cmd vmsvc/power.shutdown $vm_id"
+        else
+            # No tools detected, perform a direct power off
+            echo "VMware Tools not detected. Directly powering off VM: $vm_name"
+            execute_ssh "vim-cmd vmsvc/power.off $vm_id"
+        fi
 
-        # Wait until the VM is powered off
+        # Wait until the VM is powered off or timeout occurs
         echo "Waiting for VM: $vm_name to power off..."
+        timeout_counter=0
         while ! is_vm_powered_off $vm_id; do
+            if [ $timeout_counter -ge $SHUTDOWN_TIMEOUT ]; then
+                echo "Shutdown timed out for VM: $vm_name. Forcing power off..."
+                execute_ssh "vim-cmd vmsvc/power.off $vm_id"
+                break
+            fi
             echo "VM: $vm_name is still powered on. Checking again in $VM_POLL_INTERVAL seconds..."
             sleep $VM_POLL_INTERVAL
+            timeout_counter=$((timeout_counter + VM_POLL_INTERVAL))
         done
         echo "VM: $vm_name is now powered off."
     fi
